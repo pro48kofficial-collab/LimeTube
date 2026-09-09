@@ -46,9 +46,9 @@ const THUMBNAIL_BUCKET = "thumbnails";
 app.use(express.json({ limit: "5mb" }));
 app.use(cookieParser());
 
-app.use(
-  express.static(path.join(__dirname, "public"))
-);
+app.use(express.static(__dirname, {
+  index: "index.html"
+}));
 
 /* =========================
    DATABASE
