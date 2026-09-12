@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#090b0a">
+<title>LimeTube</title>
+<link rel="stylesheet" href="/style.css?v=32">
+</head>
+<body>
+<header>
+  <div class="brand" onclick="go('home')"><span>●</span> <b>Lime</b>Tube</div>
+  <nav>
+    <button onclick="go('home')">Головна</button>
+    <button onclick="go('subscriptions')">Підписки</button>
+    <button onclick="go('owner')">🔐</button>
+  </nav>
+  <div class="header-search-wrap">
+    <input id="search" class="search" placeholder="Пошук відео та каналів..." autocomplete="off">
+  </div>
+  <button class="profile-top" onclick="go('profile')" aria-label="Профіль">
+    <img id="profileTopAvatar" src="https://placehold.co/96x96/20271f/b8ff3d?text=ME" alt="Профіль">
+  </button>
+</header>
+<main id="app"></main>
+<script src="/app.js?v=32"></script>
+</body>
+</html>
