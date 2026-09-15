@@ -62,7 +62,62 @@ app.get('/api/home',async(req,res)=>{try{res.json({videos:await videoRows('',[])
 app.get('/api/search',async(req,res)=>{try{const term=String(req.query.q||'').trim().slice(0,80);if(!term)return res.json({channels:[],videos:[]});const s='%'+term+'%';const channels=await q(`SELECT c.*,p.username owner_username,(SELECT count(*) FROM lt4_subscriptions ss WHERE ss.channel_id=c.id)::int subscribers,(SELECT count(*) FROM lt4_videos vv WHERE vv.channel_id=c.id)::int video_count FROM lt4_channels c JOIN lt4_profiles p ON p.id=c.profile_id WHERE c.name ILIKE $1 ORDER BY c.name LIMIT 30`,[s]);const videos=await videoRows('WHERE v.title ILIKE $1 OR c.name ILIKE $1',[s]);res.json({channels,videos:videos.slice(0,60)})}catch(e){res.status(500).json({error:e.message})}});
 app.get('/api/channel/:id',async(req,res)=>{try{const c=(await q('SELECT c.*,p.username owner_username FROM lt4_channels c JOIN lt4_profiles p ON p.id=c.profile_id WHERE c.id=$1',[req.params.id]))[0];if(!c)return res.status(404).json({error:'Канал не знайдено'});const p=(await q('SELECT id FROM lt4_profiles WHERE identity=$1',[req.identity]))[0];const sub=(await q('SELECT 1 FROM lt4_subscriptions WHERE channel_id=$1 AND identity=$2',[c.id,req.identity])).length>0;res.json({channel:c,videos:await videoRows('WHERE v.channel_id=$1',[c.id]),subscribed:sub,is_owner:!!(p&&String(p.id)===String(c.profile_id)),subscribers:Number((await q('SELECT count(*) n FROM lt4_subscriptions WHERE channel_id=$1',[c.id]))[0].n)})}catch(e){res.status(500).json({error:e.message})}});
 app.get('/api/video/:id',async(req,res)=>{try{const v=(await videoRows('WHERE v.id=$1',[req.params.id]))[0];if(!v)return res.status(404).json({error:'Відео не знайдено'});await q('UPDATE lt4_videos SET views=views+1 WHERE id=$1',[req.params.id]);v.views=Number(v.views)+1;if(v.video_data)v.video_url='/media/'+v.id;v.liked=!!(await q('SELECT 1 FROM lt4_likes WHERE video_id=$1 AND identity=$2',[v.id,req.identity])).length;v.subscribed=!!(await q('SELECT 1 FROM lt4_subscriptions WHERE channel_id=(SELECT channel_id FROM lt4_videos WHERE id=$1) AND identity=$2',[v.id,req.identity])).length;v.commentsList=await q(`SELECT cm.id,cm.text,cm.media_mime,cm.media_size,cm.created_at,p.username,p.avatar_url,(cm.identity=$2) is_mine,(SELECT count(*) FROM lt4_comment_likes cl WHERE cl.comment_id=cm.id)::int likes,EXISTS(SELECT 1 FROM lt4_comment_likes cl2 WHERE cl2.comment_id=cm.id AND cl2.identity=$2) liked FROM lt4_comments cm LEFT JOIN lt4_profiles p ON p.identity=cm.identity WHERE cm.video_id=$1 ORDER BY cm.created_at DESC`,[v.id,req.identity]);v.commentsList=v.commentsList.map(c=>({...c,media_url:c.media_mime?'/comment-media/'+c.id:''}));res.json({video:v})}catch(e){res.status(500).json({error:e.message})}});
-app.get('/media/:id',async(req,res)=>{try{const r=await db.query('SELECT video_data,video_mime,video_size FROM lt4_videos WHERE id=$1',[req.params.id]);if(!r.rows.length||!r.rows[0].video_data)return res.status(404).end();const row=r.rows[0];const data=row.video_data;const total=data.length;const mime=row.video_mime||'video/mp4';res.setHeader('Content-Type',mime);res.setHeader('Accept-Ranges','bytes');res.setHeader('Cache-Control','public,max-age=31536000,immutable');const range=req.headers.range;if(!range){res.setHeader('Content-Length',total);return res.status(200).end(data)}const m=/bytes=(\d*)-(\d*)/.exec(range);if(!m)return res.status(416).set('Content-Range',`bytes */${total}`).end();let start=m[1]?Number(m[1]):Math.max(total-(Number(m[2])+1),0);let end=m[2]?Number(m[2]):total-1;if(start> end||start<0||end>=total)return res.status(416).set('Content-Range',`bytes */${total}`).end();res.status(206);res.setHeader('Content-Range',`bytes ${start}-${end}/${total}`);res.setHeader('Content-Length',end-start+1);return res.end(data.subarray(start,end+1))}catch(e){res.status(500).json({error:e.message})}});
+app.get('/media/:id',async(req,res)=>{
+  try{
+    const r=await db.query(
+      'SELECT video_data,video_mime,video_size FROM lt4_videos WHERE id=$1',
+      [req.params.id]
+    );
+
+    if(!r.rows.length||!r.rows[0].video_data)
+      return res.status(404).end();
+
+    const row=r.rows[0];
+    const data=Buffer.isBuffer(row.video_data)
+      ? row.video_data
+      : Buffer.from(row.video_data);
+
+    const total=data.length;
+    const mime=row.video_mime||'video/mp4';
+
+    res.setHeader('Content-Type',mime);
+    res.setHeader('Accept-Ranges','bytes');
+    res.setHeader('Content-Disposition','inline');
+    res.setHeader('Cache-Control','public,max-age=31536000,immutable');
+
+    const range=req.headers.range;
+
+    if(!range){
+      res.setHeader('Content-Length',total);
+      return res.status(200).send(data);
+    }
+
+    const m=/bytes=(\d*)-(\d*)/.exec(range);
+
+    if(!m)
+      return res.status(416).set('Content-Range',`bytes */${total}`).end();
+
+    let start=m[1]?Number(m[1]):0;
+    let end=m[2]?Number(m[2]):total-1;
+
+    if(!m[1]&&m[2])
+      start=Math.max(total-Number(m[2]),0);
+
+    if(start<0||start>=total||end<start)
+      return res.status(416).set('Content-Range',`bytes */${total}`).end();
+
+    end=Math.min(end,total-1);
+
+    res.status(206);
+    res.setHeader('Content-Range',`bytes ${start}-${end}/${total}`);
+    res.setHeader('Content-Length',end-start+1);
+
+    return res.send(data.subarray(start,end+1));
+  }catch(e){
+    console.error('VIDEO STREAM ERROR:',e);
+    res.status(500).json({error:e.message});
+  }
+});
 app.post('/api/subscribe/:channel',async(req,res)=>{try{const x=await q('DELETE FROM lt4_subscriptions WHERE channel_id=$1 AND identity=$2 RETURNING *',[req.params.channel,req.identity]);let subscribed=false;if(!x.length){await q('INSERT INTO lt4_subscriptions(channel_id,identity) VALUES($1,$2) ON CONFLICT DO NOTHING',[req.params.channel,req.identity]);subscribed=true}res.json({subscribed,subscribers:Number((await q('SELECT count(*) n FROM lt4_subscriptions WHERE channel_id=$1',[req.params.channel]))[0].n)})}catch(e){res.status(400).json({error:e.message})}});
 app.post('/api/like/:video',async(req,res)=>{try{const x=await q('DELETE FROM lt4_likes WHERE video_id=$1 AND identity=$2 RETURNING *',[req.params.video,req.identity]);let liked=false;if(!x.length){await q('INSERT INTO lt4_likes(video_id,identity) VALUES($1,$2) ON CONFLICT DO NOTHING',[req.params.video,req.identity]);liked=true}res.json({liked,likes:Number((await q('SELECT count(*) n FROM lt4_likes WHERE video_id=$1',[req.params.video]))[0].n)})}catch(e){res.status(400).json({error:e.message})}});
 app.post('/api/comment/:video',commentUpload.single('media'),async(req,res)=>{try{const text=String(req.body.text||'').trim().slice(0,1000);const file=req.file;if(!text&&!file)return res.status(400).json({error:'Напиши коментар або додай медіа'});const c=(await q('INSERT INTO lt4_comments(id,video_id,identity,text,media_data,media_mime,media_size) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,video_id,text,media_mime,media_size,created_at',[id(),req.params.video,req.identity,text,file?file.buffer:null,file?.mimetype||'',file?.size||0]))[0];c.media_url=file?'/comment-media/'+c.id:'';res.json({comment:c})}catch(e){res.status(400).json({error:e.message})}});
